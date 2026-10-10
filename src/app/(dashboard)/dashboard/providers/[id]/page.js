@@ -62,6 +62,7 @@ export default function ProviderDetailPage() {
   const [modelTestResults, setModelTestResults] = useState({});
   const [modelsTestError, setModelsTestError] = useState("");
   const [testingModelIds, setTestingModelIds] = useState(() => new Set());
+  const [testingAllModels, setTestingAllModels] = useState(false);
   const [showAddCustomModel, setShowAddCustomModel] = useState(false);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState([]);
   const [bulkProxyPoolId, setBulkProxyPoolId] = useState("__none__");
@@ -1128,8 +1129,8 @@ export default function ProviderDetailPage() {
     </Modal>
   );
 
-  const handleTestModel = async (modelId) => {
-    if (testingModelIds.has(modelId)) return;
+  // Ping one model and paint its chip. Shared by the per-model button and Test All.
+  const testOneModel = async (modelId) => {
     setTestingModelIds((prev) => new Set(prev).add(modelId));
     try {
       const res = await fetch("/api/models/test", {
@@ -1139,13 +1140,31 @@ export default function ProviderDetailPage() {
       });
       const data = await res.json();
       setModelTestResults((prev) => ({ ...prev, [modelId]: data.ok ? "ok" : "error" }));
-      setModelsTestError(data.ok ? "" : (data.error || "Model not reachable"));
+      if (!data.ok) setModelsTestError(data.error || "Model not reachable");
     } catch {
       setModelTestResults((prev) => ({ ...prev, [modelId]: "error" }));
       setModelsTestError("Network error");
     } finally {
       setTestingModelIds((prev) => { const n = new Set(prev); n.delete(modelId); return n; });
     }
+  };
+
+  const handleTestModel = async (modelId) => {
+    if (testingModelIds.has(modelId)) return;
+    await testOneModel(modelId);
+  };
+
+  // Results land on each chip as they come in. The first model runs alone so a
+  // token refresh happens once, then the rest go in parallel — the same order
+  // /api/providers/[id]/test-models uses.
+  const handleTestAllModels = async (ids) => {
+    if (testingAllModels || !ids.length) return;
+    setTestingAllModels(true);
+    setModelsTestError("");
+    const [first, ...rest] = ids;
+    await testOneModel(first);
+    await Promise.all(rest.map((id) => testOneModel(id)));
+    setTestingAllModels(false);
   };
 
   const renderModelsSection = () => {
@@ -1773,8 +1792,29 @@ export default function ProviderDetailPage() {
               ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
             ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; }).map((m) => m.id);
             const activeIds = allIds.filter((id) => !disabledModelIds.includes(id));
+            // Test All also covers custom models, which have their own testable chips.
+            const customModelIds = getProviderCustomModelRows({
+              customModels,
+              modelAliases,
+              providerAlias: providerStorageAlias,
+              builtInModels: models,
+              type: "llm",
+            }).map((m) => m.id);
+            const testableIds = [...new Set([...activeIds, ...customModelIds])];
+            const canTest = connections.length > 0 || isFreeNoAuth;
             return (
               <div className="flex gap-2">
+                {canTest && testableIds.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon="science"
+                    onClick={() => handleTestAllModels(testableIds)}
+                    disabled={testingAllModels}
+                  >
+                    {testingAllModels ? "Testing..." : "Test All"}
+                  </Button>
+                )}
                 {disabledModelIds.length > 0 && (
                   <Button size="sm" variant="secondary" icon="restart_alt" onClick={handleEnableAll}>
                     Active All

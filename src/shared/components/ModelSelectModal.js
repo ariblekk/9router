@@ -5,7 +5,9 @@ import PropTypes from "prop-types";
 import Modal from "./Modal";
 import ProviderIcon from "./ProviderIcon";
 import CapacityBadges from "./CapacityBadges";
+import Select from "./Select";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
+import { useOpenRouterRanking } from "@/shared/hooks/useOpenRouterRanking";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, AI_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, getProviderAlias } from "@/shared/constants/providers";
 
@@ -94,7 +96,9 @@ export default function ModelSelectModal({
     });
   }, [activeProviders, kindFilter]);
   const { getCaps } = useModelCaps();
+  const { rankModels, ready: rankingReady } = useOpenRouterRanking();
   const [searchQuery, setSearchQuery] = useState("");
+  const [rankFilter, setRankFilter] = useState("all");
   const [combos, setCombos] = useState([]);
   const [providerNodes, setProviderNodes] = useState([]);
   const [customModels, setCustomModels] = useState([]);
@@ -482,7 +486,15 @@ export default function ModelSelectModal({
     });
 
     return filtered;
-  }, [groupedModels, searchQuery, addedModelValues]);
+  }, [groupedModels, searchQuery, addedModelValues, capFilter, getCaps]);
+
+  // Ranked models section (OpenRouter coding/reasoning/intelligence index)
+  const rankedModels = useMemo(() => {
+    if (!rankingReady || rankFilter === "all" || kindFilter || capFilter) return [];
+    const allModels = Object.values(groupedModels).flatMap(g => g.models);
+    const category = rankFilter === "coding" ? "coding" : rankFilter === "reasoning" ? "reasoning" : "intelligence";
+    return rankModels(allModels, category).slice(0, 30);
+  }, [rankingReady, rankFilter, kindFilter, capFilter, groupedModels, rankModels]);
 
   const handleSelect = (model) => {
     const value = model?.value || model?.name || model;
@@ -518,6 +530,23 @@ export default function ModelSelectModal({
         <span>Click to add, click again to remove. Changes are saved automatically.</span>
       </div>
 
+      {/* Ranking filter - only for LLM picker (no kindFilter/capFilter) */}
+      {!kindFilter && !capFilter && (
+        <div className="mb-3">
+          <Select
+            value={rankFilter}
+            onChange={(e) => setRankFilter(e.target.value)}
+            options={[
+              { value: "all", label: "All Models" },
+              { value: "coding", label: "Best for Coding" },
+              { value: "reasoning", label: "Best for Reasoning" },
+              { value: "intelligence", label: "Best Overall" },
+            ]}
+            selectClassName="py-1.5 text-xs"
+          />
+        </div>
+      )}
+
       {/* Search - compact */}
       <div className="mb-3">
         <div className="relative">
@@ -536,6 +565,49 @@ export default function ModelSelectModal({
 
       {/* Models grouped by provider - compact */}
       <div className="max-h-[400px] overflow-y-auto space-y-3">
+        {/* Ranked section - when filter active */}
+        {rankedModels.length > 0 && (
+          <div>
+            <div className="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5">
+              <span className="material-symbols-outlined text-primary text-[14px]">workspace_premium</span>
+              <span className="text-xs font-medium text-primary">
+                {rankFilter === "coding" ? "Best for Coding" : rankFilter === "reasoning" ? "Best for Reasoning" : "Best Overall"}
+              </span>
+              <span className="text-[10px] text-text-muted">({rankedModels.length})</span>
+              <span className="text-[9px] text-text-muted ml-auto">OpenRouter / Artificial Analysis</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {rankedModels.map((model) => {
+                const isSelected = selectedModel === model.value;
+                return (
+                  <button
+                    key={model.value}
+                    onClick={() => handleSelect(model)}
+                    title={`Score: ${model.score}`}
+                    className={`
+                      px-2 py-1 rounded-xl text-xs font-medium transition-all border hover:cursor-pointer
+                      ${isSelected
+                        ? "bg-primary text-white border-primary"
+                        : addedModelValues.includes(model.value)
+                          ? "bg-primary border-primary text-white hover:bg-primary-hover"
+                          : "bg-surface border-border text-text-main hover:border-primary/50 hover:bg-primary/5"
+                      }
+                    `}
+                  >
+                    <span className="flex items-center gap-1">
+                      {addedModelValues.includes(model.value) && (
+                        <span className="material-symbols-outlined leading-none" style={{ fontSize: "10px" }}>check</span>
+                      )}
+                      {model.name}
+                      <CapacityBadges caps={getCaps(model.value)} />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Combos section - always first */}
         {filteredCombos.length > 0 && (
           <div>
