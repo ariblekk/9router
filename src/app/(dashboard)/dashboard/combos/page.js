@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -8,7 +8,11 @@ import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifi
 import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModal, CapacityBadges, Select, Toggle } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
+import { useOpenRouterRanking } from "@/shared/hooks/useOpenRouterRanking";
+import { FREE_PROVIDERS, getProviderAlias } from "@/shared/constants/providers";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+
+const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter((id) => FREE_PROVIDERS[id]?.noAuth);
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -1014,6 +1018,10 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
   const [modelAliases, setModelAliases] = useState({});
+  const [availableModels, setAvailableModels] = useState([]);
+  const [rankCategory, setRankCategory] = useState("coding");
+
+  const { rankModels, ready: rankingReady } = useOpenRouterRanking();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1036,10 +1044,18 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
 
   const fetchModalData = async () => {
     try {
-      const aliasesRes = await fetch("/api/models/alias");
-      if (!aliasesRes.ok) return;
-      const aliasesData = await aliasesRes.json();
-      setModelAliases(aliasesData.aliases || {});
+      const [aliasesRes, modelsRes] = await Promise.all([
+        fetch("/api/models/alias"),
+        fetch("/api/models"),
+      ]);
+      if (aliasesRes.ok) {
+        const aliasesData = await aliasesRes.json();
+        setModelAliases(aliasesData.aliases || {});
+      }
+      if (modelsRes.ok) {
+        const modelsData = await modelsRes.json();
+        setAvailableModels(modelsData.models || []);
+      }
     } catch (error) {
       console.error("Error fetching modal data:", error);
     }
@@ -1097,6 +1113,48 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
     setModels(newModels);
   };
 
+  const topRankedModels = useMemo(() => {
+    if (!rankingReady || !availableModels.length || kindFilter) return [];
+    const activeSet = new Set((activeProviders || []).map((p) => p.provider));
+    NO_AUTH_PROVIDER_IDS.forEach((id) => activeSet.add(id));
+
+    const eligible = availableModels.filter((m) => {
+      if (m.kind && m.kind !== "llm") return false;
+      const prov = m.provider;
+      return activeSet.has(prov) || activeSet.has(getProviderAlias(prov));
+    });
+
+    return rankModels(
+      eligible.map((m) => ({ ...m, id: m.model })),
+      rankCategory
+    );
+  }, [rankingReady, availableModels, activeProviders, rankCategory, rankModels, kindFilter]);
+
+  const handleAddTop3 = () => {
+    const unadded = topRankedModels.filter((m) => {
+      const val = m.routedModel || m.fullModel || m.model;
+      return !models.includes(val) && !models.includes(m.model) && (!m.alias || !models.includes(m.alias));
+    });
+    const toAdd = unadded.slice(0, 3).map((m) => m.routedModel || m.fullModel || m.model);
+    if (toAdd.length > 0) {
+      if (!name.trim()) {
+        const catName = rankCategory === "coding" ? "coding-fallback" : rankCategory === "reasoning" ? "reasoning-fallback" : "best-overall";
+        setName(catName);
+      }
+      setModels((prev) => [...prev, ...toAdd]);
+    }
+  };
+
+  const handleToggleRankedModel = (m) => {
+    const val = m.routedModel || m.fullModel || m.model;
+    const isAdded = models.includes(val) || models.includes(m.model) || (m.alias && models.includes(m.alias));
+    if (isAdded) {
+      setModels((prev) => prev.filter((x) => x !== val && x !== m.model && x !== m.alias));
+    } else {
+      setModels((prev) => [...prev, val]);
+    }
+  };
+
   const handleSave = async () => {
     if (!validateName(name)) return;
     setSaving(true);
@@ -1112,6 +1170,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
         isOpen={isOpen}
         onClose={onClose}
         title={isEdit ? "Edit Combo" : "Create Combo"}
+        size="lg"
       >
         <div className="flex flex-col gap-3">
           {/* Name */}
@@ -1167,11 +1226,91 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
             {/* Add Model button */}
             <button
               onClick={() => setShowModelSelect(true)}
-              className="w-full mt-2 py-2 border border-dashed border-black/10 dark:border-white/10 rounded-lg text-xs text-primary font-medium hover:text-primary hover:border-primary/50 transition-colors flex items-center justify-center gap-1"
+              className="w-full mt-2 py-2 border border-dashed border-black/10 dark:border-white/10 rounded-lg text-xs text-primary font-medium hover:text-primary hover:border-primary/50 transition-colors flex items-center justify-center gap-1 cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">add</span>
               Add Model
             </button>
+
+            {/* Recommended Models from Rankings */}
+            {!kindFilter && (
+              <div className="mt-3 pt-2.5 border-t border-border/40">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1">
+                    <span className="material-symbols-outlined text-primary text-[14px]">workspace_premium</span>
+                    <span className="text-xs font-medium text-text-main">Recommended Models</span>
+                  </div>
+                  <span className="text-[10px] text-text-muted">OpenRouter / Artificial Analysis</span>
+                </div>
+
+                {/* Categories */}
+                <div className="flex items-center gap-1 mb-2">
+                  {[
+                    { id: "coding", label: "Coding", icon: "code" },
+                    { id: "reasoning", label: "Reasoning", icon: "psychology" },
+                    { id: "intelligence", label: "Overall", icon: "neurology" },
+                  ].map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setRankCategory(cat.id)}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer ${
+                        rankCategory === cat.id
+                          ? "bg-primary text-white"
+                          : "bg-surface border border-border text-text-muted hover:text-text-main"
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[12px]">{cat.icon}</span>
+                      {cat.label}
+                    </button>
+                  ))}
+
+                  {topRankedModels.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleAddTop3}
+                      className="ml-auto text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[12px]">playlist_add</span>
+                      + Add Top 3
+                    </button>
+                  )}
+                </div>
+
+                {/* Model chips */}
+                {topRankedModels.length > 0 ? (
+                  <div className="flex flex-wrap gap-1 max-h-[110px] overflow-y-auto p-1 bg-black/[0.02] dark:bg-white/[0.02] border border-border/40 rounded-lg">
+                    {topRankedModels.slice(0, 12).map((m) => {
+                      const val = m.routedModel || m.fullModel || m.model;
+                      const isAdded = models.includes(val) || models.includes(m.model) || (m.alias && models.includes(m.alias));
+                      return (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => handleToggleRankedModel(m)}
+                          title={`${m.name || m.model} (${val}) • Score: ${m.score}`}
+                          className={`px-2 py-0.5 rounded-lg text-[11px] font-medium border transition-all flex items-center gap-1 cursor-pointer ${
+                            isAdded
+                              ? "bg-primary text-white border-primary"
+                              : "bg-surface border-border text-text-main hover:border-primary/50 hover:bg-primary/5"
+                          }`}
+                        >
+                          <span className="material-symbols-outlined text-[10px]">
+                            {isAdded ? "check" : "add"}
+                          </span>
+                          <span>{m.name || m.model}</span>
+                          <span className="text-[9px] opacity-75 font-mono">#{m.score}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-text-muted italic py-1">
+                    {rankingReady ? "No active models match this category." : "Loading recommendations..."}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Actions */}
