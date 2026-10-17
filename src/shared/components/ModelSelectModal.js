@@ -126,13 +126,6 @@ export default function ModelSelectModal({
       return (info.serviceKinds || []).includes(kindFilter);
     });
   }, [effectiveConnections, kindFilter]);
-    if (!kindFilter) return activeOnly;
-    return activeOnly.filter((p) => {
-      const info = AI_PROVIDERS[p.provider];
-      const kinds = info?.serviceKinds || ["llm"];
-      return kinds.includes(kindFilter);
-    });
-  }, [effectiveConnections, kindFilter]);
 
   // Set of provider IDs that have connections configured, but ALL of them are deactivated (isActive === false)
   const deactivatedProviderIds = useMemo(() => {
@@ -154,15 +147,10 @@ export default function ModelSelectModal({
   // activeProviders itself changes.
   const liveConnectionIdsByProvider = useMemo(() => {
     const map = Object.fromEntries(LIVE_CATALOG_PROVIDERS.map((id) => [id, []]));
-  const liveConnectionIdsByProvider = useMemo(() => {
-    const map = Object.fromEntries(LIVE_CATALOG_PROVIDERS.map((id) => [id, []]));
     for (const p of filteredActiveProviders) {
       if (p?.id && Object.prototype.hasOwnProperty.call(map, p.provider)) {
         map[p.provider].push(p.id);
       }
-    }
-    return map;
-  }, [filteredActiveProviders]);
     }
     return map;
   }, [filteredActiveProviders]);
@@ -683,30 +671,6 @@ export default function ModelSelectModal({
 
       {/* Search & batch actions */}
       <div className="mb-3 space-y-2">
-        <div className="relative">
-          <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted text-[16px]">
-            search
-          </span>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search models..."
-            className="w-full rounded-md border border-border bg-surface px-8 py-2 text-sm text-text"
-          />
-        </div>
-
-        {visibleModels.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={handleSelectAllVisible} className="text-xs text-primary">
-              Select all visible
-            </button>
-            <button type="button" onClick={handleDeselectAllVisible} className="text-xs text-primary">
-              Deselect all visible
-            </button>
-          </div>
-        )}
-      </div>
         <div className="relative">
           <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted text-[16px]">
             search
